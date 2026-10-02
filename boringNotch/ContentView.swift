@@ -36,6 +36,7 @@ struct ContentView: View {
     @Default(.useMusicVisualizer) var useMusicVisualizer
 
     @Default(.showNotHumanFace) var showNotHumanFace
+    @Default(.claudeLiveActivity) var claudeLiveActivity
 
     // Shared interactive spring for movement/resizing to avoid conflicting animations
     private let animationSpring = Animation.interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0)
@@ -43,6 +44,7 @@ struct ContentView: View {
     private let extendedHoverPadding: CGFloat = 30
     // Lati della vista a riposo: uguali, o il nero non resta centrato sul notch fisico
     private let idleSideWidth: CGFloat = 50
+    private let claudeCompletedSideWidth: CGFloat = 90
     private let zeroHeightHoverPadding: CGFloat = 10
 
     private var topCornerRadius: CGFloat {
@@ -63,8 +65,9 @@ struct ContentView: View {
     private var computedChinWidth: CGFloat {
         var chinWidth: CGFloat = vm.closedNotchSize.width
 
-        if coordinator.claudeState != nil && vm.notchState == .closed && !vm.hideOnClosed {
-            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
+        if claudeLiveActivity && coordinator.claudeState != nil && vm.notchState == .closed && !vm.hideOnClosed {
+            chinWidth += coordinator.claudeState == .done
+                ? 2 * claudeCompletedSideWidth + 20 : (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
         } else if coordinator.expandingView.type == .battery && coordinator.expandingView.show
             && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
         {
@@ -273,7 +276,7 @@ struct ContentView: View {
                     .padding(.top, 40)
                     Spacer()
                 } else {
-                    if let claudeState = coordinator.claudeState, vm.notchState == .closed, !vm.hideOnClosed {
+                    if claudeLiveActivity, let claudeState = coordinator.claudeState, vm.notchState == .closed, !vm.hideOnClosed {
                         ClaudeLiveActivity(claudeState)
                     } else if coordinator.expandingView.type == .battery && coordinator.expandingView.show
                         && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
@@ -436,20 +439,41 @@ struct ContentView: View {
     @ViewBuilder
     func ClaudeLiveActivity(_ state: ClaudeState) -> some View {
         let side = max(0, vm.effectiveClosedNotchHeight - 12)
-        HStack {
-            Image("claude")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: side, height: side)
+        if state == .done {
+            // Sessione appena completata: nome a sinistra della fotocamera, "Completata" a destra
+            HStack {
+                Text(coordinator.claudeCompletedName ?? "")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(width: claudeCompletedSideWidth, alignment: .trailing)
 
-            Rectangle()
-                .fill(.black)
-                .frame(width: vm.closedNotchSize.width + -cornerRadiusInsets.closed.top)
+                Rectangle()
+                    .fill(.black)
+                    .frame(width: vm.closedNotchSize.width + -cornerRadiusInsets.closed.top)
 
-            ClaudeStateIcon(state: state)
-                .frame(width: side, height: side)
+                Text("Completata")
+                    .foregroundStyle(Color.aquaGreen)
+                    .frame(width: claudeCompletedSideWidth, alignment: .leading)
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
+        } else {
+            HStack {
+                Image("claude")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: side, height: side)
+
+                Rectangle()
+                    .fill(.black)
+                    .frame(width: vm.closedNotchSize.width + -cornerRadiusInsets.closed.top)
+
+                ClaudeStateIcon(state: state)
+                    .frame(width: side, height: side)
+            }
+            .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
         }
-        .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
     }
 
     @ViewBuilder

@@ -31,10 +31,8 @@ struct ClaudeStateIcon: View {
                 Image(systemName: "questionmark.circle.fill").resizable().foregroundStyle(.yellow)
             case .permission:
                 Image(systemName: "pause.circle.fill").resizable().foregroundStyle(Color.aquaGreen)
-            case .done:
+            case .done, .idle:
                 Image(systemName: "checkmark.circle.fill").resizable().foregroundStyle(Color.aquaGreen)
-            case .idle:
-                Image(systemName: "checkmark.circle.fill").resizable().foregroundStyle(.gray)
             }
         }
         .aspectRatio(1, contentMode: .fit)
@@ -46,7 +44,7 @@ struct ClaudeSessionsView: View {
     @ObservedObject var chat = ClaudeChatModel.shared
 
     private let labels: [ClaudeState: String] = [
-        .working: "Al lavoro", .done: "Completata", .question: "Ti fa una domanda", .permission: "Aspetta un permesso", .idle: "In attesa",
+        .working: "Al lavoro", .done: "Completata", .question: "Ti fa una domanda", .permission: "Aspetta un permesso", .idle: "Completata",
     ]
 
     var body: some View {
@@ -93,8 +91,18 @@ struct ClaudeSessionsView: View {
                         .font(.headline)
                         .foregroundStyle(.white)
                         .lineLimit(1)
+                    if let context = session.context {
+                        Text("•").foregroundStyle(.gray)
+                        // Ricalcolata ogni minuto: la cache scade da sola, senza nuovi eventi
+                        TimelineView(.everyMinute) { timeline in
+                            contextLabel(context, expired: [.done, .idle].contains(session.state)
+                                         && timeline.date.timeIntervalSince(session.since) >= 3600)
+                        }
+                    }
                     Spacer()
-                    Text(labels[session.state] ?? "")
+                    Text(session.state == .working && session.agentsRunning
+                         ? "SubAgent \(session.agents.values.filter { $0 }.count)/\(session.agents.count)"
+                         : labels[session.state] ?? "")
                         .foregroundStyle(.gray)
                     Text(session.since, style: .relative)
                         .foregroundStyle(.gray)
@@ -127,6 +135,16 @@ struct ClaudeSessionsView: View {
         // Stessi margini della chat (~16 pt dai bordi del notch)
         .padding(.horizontal, 4)
         .padding(.bottom, 5)
+    }
+
+    // Contesto: oltre 33% giallo con "!", oltre 66% rosso con "!!".
+    // Cache scaduta (1 h da "Completata"): rosso e un "!" in più
+    private func contextLabel(_ context: Double, expired: Bool) -> some View {
+        let pct = Int(context.rounded())
+        let level = pct > 66 ? 2 : pct > 33 ? 1 : 0
+        return Text("\(pct)%" + String(repeating: "!", count: level + (expired ? 1 : 0)))
+            .foregroundStyle(level == 2 || expired ? .red : level == 1 ? .yellow : .gray)
+            .monospacedDigit()
     }
 
     @ViewBuilder

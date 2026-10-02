@@ -24,15 +24,49 @@ enum SneakContentType {
 enum ClaudeState: Int, CaseIterable {
     case idle
     case working
-    case done // ha appena finito (hook Stop): spunta per 10 s, poi torna idle
+    case done // ha appena finito (hook Stop): "<nome> Completata" nel notch chiuso per 5 s, poi torna idle
     case question
     case permission
+}
+
+// Suoni di fine sessione: data set in Assets.xcassets/Claude Sounds, nome = file originale
+enum ClaudeSound {
+    static let names = ["Confirm 1", "Confirm 2", "Cyberpunk", "GTA Online", "GTA V Franklin", "Minecraft Raid", "One Piece 1"].sorted()
+    private static var current: NSSound? // riferimento forte finché suona; un nuovo suono interrompe il precedente
+    private static var next = 0 // ponytail: posizione nella sequenza solo in memoria, riparte dal primo al riavvio
+
+    // Custom: ordine salvato; i suoni non ancora ordinati (es. aggiunti dopo) vanno in coda in ordine alfabetico
+    static func ordered(_ saved: [String], _ sort: ClaudeSoundSort = .custom) -> [String] {
+        switch sort {
+        case .az: return names
+        case .za: return names.reversed()
+        case .custom:
+            let saved = saved.filter(names.contains)
+            return saved + names.filter { !saved.contains($0) }
+        }
+    }
+
+    static func playNext() {
+        let sounds = ordered(Defaults[.claudeSoundOrder], Defaults[.claudeSoundSort]).filter(Defaults[.claudeSounds].contains)
+        guard !sounds.isEmpty else { return }
+        play(Defaults[.claudeSoundsRandom] ? sounds.randomElement()! : sounds[next % sounds.count])
+        next += 1
+    }
+
+    static func play(_ name: String) {
+        current?.stop()
+        current = NSDataAsset(name: name).flatMap { NSSound(data: $0.data) }
+        current?.play()
+    }
 }
 
 struct ClaudeSession {
     var state: ClaudeState
     var cwd: String
     var since: Date = .now
+    var context: Double? // finestra di contesto usata, 0-100 (dalla statusline)
+    var agents: [String: Bool] = [:] // subagent dell'ultimo gruppo lanciato: agent_id → finito
+    var agentsRunning: Bool { agents.values.contains(false) }
 }
 
 // rate_limits della statusline di Claude Code (used_percentage 0-100, resets_at epoch in secondi)
@@ -138,6 +172,11 @@ class BoringViewCoordinator: ObservableObject {
     var claudeState: ClaudeState? {
         claudeSessions.values.map(\.state).filter { $0 != .idle }.max { $0.rawValue < $1.rawValue }
     }
+    // Nome (cartella) dell'ultima sessione appena completata
+    var claudeCompletedName: String? {
+        claudeSessions.values.filter { $0.state == .done }.max { $0.since < $1.since }
+            .map { URL(fileURLWithPath: $0.cwd).lastPathComponent }
+    }
 
     // JSON grezzo dell'ultimo rate_limits ricevuto: persistito, così la pagina non è vuota dopo un riavvio
     @AppStorage("claudeLimits") var claudeLimitsJSON: String = ""
@@ -161,19 +200,60 @@ class BoringViewCoordinator: ObservableObject {
                         guard let self else { return }
                         if let at, let since = self.claudeSessions[id]?.since, at < since { return }
                         withAnimation(.smooth) {
-                            guard let state else { self.claudeSessions[id] = nil; return }
-                            if self.claudeSessions[id]?.state != state {
-                                self.claudeSessions[id] = ClaudeSession(state: state, cwd: cwd)
+                            guard var new = state else { self.claudeSessions[id] = nil; return }
+                            let old = self.claudeSessions[id]
+                            // idle_prompt arriva anche mentre aspetta i subagent in background: resta al lavoro.
+                            // ponytail: anche Esc che uccide i subagent (niente SubagentStop) lascia "al lavoro" fino al prossimo Stop
+                            if new == .idle, old?.agentsRunning == true { new = .working }
+                            if old?.state != new {
+                                var session = old ?? ClaudeSession(state: new, cwd: cwd)
+                                session.state = new
+                                session.cwd = cwd
+                                session.since = .now
+                                // done arriva solo senza subagent in background (claude-hook.js): azzera anche quelli uccisi
+                                if new == .done { session.agents = [:] }
+                                self.claudeSessions[id] = session
+                                if new == .done { ClaudeSound.playNext() }
                             }
                         }
                         guard state == .done, let since = self.claudeSessions[id]?.since else { return }
-                        try? await Task.sleep(for: .seconds(10))
+                        try? await Task.sleep(for: .seconds(5))
                         // Torna idle solo se nel frattempo non è cambiato nulla (es. un nuovo prompt)
                         if self.claudeSessions[id]?.state == .done, self.claudeSessions[id]?.since == since {
                             withAnimation(.smooth) { self.claudeSessions[id]?.state = .idle }
                         }
                     }
             }
+        }
+        // Subagent: "boringnotch.claude.agent" con userInfo { agent: agent_id, done: SubagentStop }
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("boringnotch.claude.agent"),
+            object: nil, queue: .main) { [weak self] notification in
+                guard let id = notification.object as? String,
+                      let agent = notification.userInfo?["agent"] as? String else { return }
+                let done = notification.userInfo?["done"] as? Bool ?? false
+                Task { @MainActor in
+                    guard let self, var session = self.claudeSessions[id] else { return }
+                    if !done {
+                        // Nessuno dei precedenti lavora più: nuovo gruppo, il conteggio riparte
+                        if !session.agentsRunning { session.agents = [:] }
+                        session.agents[agent] = false
+                    } else if session.agents[agent] != nil {
+                        session.agents[agent] = true
+                    }
+                    self.claudeSessions[id] = session
+                }
+        }
+        // Finestra di contesto: "boringnotch.claude.context" con userInfo { pct } (statusline, solo sessioni già note)
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("boringnotch.claude.context"),
+            object: nil, queue: .main) { [weak self] notification in
+                guard let id = notification.object as? String,
+                      let pct = notification.userInfo?["pct"] as? Double else { return }
+                Task { @MainActor in
+                    guard let self, let session = self.claudeSessions[id], session.context != pct else { return }
+                    self.claudeSessions[id]?.context = pct
+                }
         }
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("boringnotch.claude.limits"),

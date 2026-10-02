@@ -51,6 +51,13 @@ struct SettingsView: View {
                 NavigationLink(value: "Shelf") {
                     Label("Shelf", systemImage: "books.vertical")
                 }
+                NavigationLink(value: "Claude") {
+                    Label {
+                        Text("Claude Code")
+                    } icon: {
+                        Image("claude").renderingMode(.template).resizable().scaledToFit().frame(width: 16, height: 16)
+                    }
+                }
                 NavigationLink(value: "Shortcuts") {
                     Label("Shortcuts", systemImage: "keyboard")
                 }
@@ -85,6 +92,8 @@ struct SettingsView: View {
                     Charge()
                 case "Shelf":
                     Shelf()
+                case "Claude":
+                    ClaudeSettings()
                 case "Shortcuts":
                     Shortcuts()
                 case "Extensions":
@@ -1716,6 +1725,88 @@ struct AccentCircleButton: View {
         }
         .buttonStyle(.plain)
         .help(isSystemDefault ? "Use your macOS system accent color" : "")
+    }
+}
+
+struct ClaudeSettings: View {
+    @Default(.claudeSounds) var sounds
+    @Default(.claudeSoundOrder) var order
+    @Default(.claudeSoundsRandom) var random
+    @Default(.claudeSoundSort) var sort
+    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var dragging: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Defaults.Toggle(key: .claudeLiveActivity) {
+                    Text("Show session status in the closed notch")
+                }
+                Defaults.Toggle(key: .claudeOpenOnHover) {
+                    Text("Open the Claude tab while a session is working")
+                }
+            } footer: {
+                Text("Requires claude-hook.js registered as a hook and status line in ~/.claude/settings.json.")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+
+            Section {
+                Picker("Playback order", selection: $random) {
+                    Text("In order").tag(false)
+                    Text("Random").tag(true)
+                }
+                ForEach(ClaudeSound.ordered(order, sort), id: \.self) { name in
+                    HStack {
+                        Toggle(name, isOn: Binding(
+                            get: { sounds.contains(name) },
+                            set: { if $0 { sounds.insert(name) } else { sounds.remove(name) } }
+                        ))
+                        .toggleStyle(.checkbox)
+                        Spacer()
+                        Button { ClaudeSound.play(name) } label: { Image(systemName: "play.fill") }
+                            .buttonStyle(.borderless)
+                        if !random && sort == .custom {
+                            // .onMove e il drag & drop di sistema non funzionano in un Form raggruppato su macOS:
+                            // DragGesture sulla maniglia, la riga si sposta sotto il puntatore mentre trascini
+                            Image(systemName: "line.3.horizontal")
+                                .foregroundStyle(.secondary)
+                                .contentShape(Rectangle())
+                                .gesture(DragGesture(coordinateSpace: .named("claudeSounds"))
+                                    .onChanged { drag in
+                                        dragging = name
+                                        guard let target = rowFrames.first(where: { $0.value.minY...$0.value.maxY ~= drag.location.y })?.key,
+                                              target != name else { return }
+                                        var list = ClaudeSound.ordered(order)
+                                        guard let from = list.firstIndex(of: name), let to = list.firstIndex(of: target) else { return }
+                                        list.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
+                                        withAnimation(.smooth(duration: 0.2)) { order = list }
+                                    }
+                                    .onEnded { _ in dragging = nil })
+                        }
+                    }
+                    .background(dragging == name ? Color.effectiveAccent.opacity(0.2) : .clear, in: .rect(cornerRadius: 4))
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("claudeSounds")) }) { rowFrames[name] = $0 }
+                }
+            } header: {
+                HStack {
+                    Text("Sounds when a session completes")
+                    Spacer()
+                    Picker("Sort", selection: $sort) {
+                        ForEach(ClaudeSoundSort.allCases, id: \.self) { Text($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            } footer: {
+                Text(random ? "A random selected sound plays each time." : "Selected sounds play one after another, in this order." + (sort == .custom ? " Drag to reorder." : ""))
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+        }
+        .coordinateSpace(.named("claudeSounds"))
+        .accentColor(.effectiveAccent)
+        .navigationTitle("Claude Code")
     }
 }
 

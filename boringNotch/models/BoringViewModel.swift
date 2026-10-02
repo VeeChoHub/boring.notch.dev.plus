@@ -191,7 +191,7 @@ class BoringViewModel: NSObject, ObservableObject {
 
     func open() {
         // Claude Code al lavoro: apri sulla pagina delle sessioni
-        if coordinator.claudeState != nil {
+        if Defaults[.claudeOpenOnHover] && coordinator.claudeState != nil {
             coordinator.currentView = .claude
         }
         self.notchSize = openNotchSize(for: coordinator.currentView)

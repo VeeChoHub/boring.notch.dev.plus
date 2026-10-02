@@ -30,6 +30,10 @@ enum CalendarSelectionState: Codable, Defaults.Serializable {
     case selected(Set<String>)
 }
 
+enum ClaudeSoundSort: String, CaseIterable, Defaults.Serializable {
+    case az = "A-Z", za = "Z-A", custom = "Custom"
+}
+
 enum HideNotchOption: String, Defaults.Serializable {
     case always
     case nowPlayingOnly
@@ -170,6 +174,15 @@ extension Defaults.Keys {
     static let autoRemoveShelfItems = Key<Bool>("autoRemoveShelfItems", default: false)
     static let expandedDragDetection = Key<Bool>("expandedDragDetection", default: true)
     
+    // MARK: Claude Code
+    static let claudeLiveActivity = Key<Bool>("claudeLiveActivity", default: true)
+    static let claudeOpenOnHover = Key<Bool>("claudeOpenOnHover", default: true)
+    // Suoni di fine sessione: selezionati (vuoto = nessuno), ordine scelto dall'utente, casuale o in sequenza
+    static let claudeSounds = Key<Set<String>>("claudeSounds", default: ["Confirm 1"])
+    static let claudeSoundOrder = Key<[String]>("claudeSoundOrder", default: [])
+    static let claudeSoundsRandom = Key<Bool>("claudeSoundsRandom", default: false)
+    static let claudeSoundSort = Key<ClaudeSoundSort>("claudeSoundSort", default: .custom) // .custom = claudeSoundOrder
+
     // MARK: Calendar
     static let calendarSelectionState = Key<CalendarSelectionState>("calendarSelectionState", default: .all)
     static let hideAllDayEvents = Key<Bool>("hideAllDayEvents", default: false)
