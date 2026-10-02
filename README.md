@@ -153,6 +153,8 @@ brew install --cask TheBoredTeam/boring-notch/boring-notch
 3. **Build and Run**:
     - Click the "Run" button or press `Cmd + R`. Watch the magic unfold!
 
+**Or install it in `/Applications` from the terminal** (no Xcode GUI needed): run `./install.sh` from the repo root. It builds, signs with a local certificate created on the first run (so macOS permissions survive rebuilds), and replaces and relaunches the app. To update: `git pull && ./install.sh`. Your settings are kept.
+
 ## 🤝 Contributing
 
 We’re all about good vibes and awesome contributions! Read [CONTRIBUTING.md](CONTRIBUTING.md) to learn how you can join the fun!
