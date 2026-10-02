@@ -25,6 +25,10 @@ fi
 xcodebuild -project boringNotch.xcodeproj -scheme boringNotch -configuration Release \
   -derivedDataPath build ENABLE_HARDENED_RUNTIME=NO build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
 
+# The Install button in Settings (Claude Code) registers this copy as the Claude Code hook.
+# ponytail: copied here instead of an Xcode resource, the app is only built by this script
+cp claude-hook.js "$BUILT/Contents/Resources/"
+
 # Inside-out: the XPC helper asks for Accessibility, so it needs the stable signature too
 codesign --force --sign "$CERT" --preserve-metadata=entitlements "$BUILT/Contents/XPCServices/BoringNotchXPCHelper.xpc"
 codesign --force --sign "$CERT" --preserve-metadata=entitlements "$BUILT"

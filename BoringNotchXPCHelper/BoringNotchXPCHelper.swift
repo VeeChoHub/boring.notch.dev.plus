@@ -14,6 +14,23 @@ class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
 
     // MARK: - Claude Code (chat del notch: l'app è in sandbox e non può lanciare claude)
 
+    /// Onboarding nelle impostazioni: `claude-hook.js install` (Contents/Resources dell'app, copiato da install.sh)
+    /// scrive hook e statusline in ~/.claude/settings.json. Reply: il settings.json punta a questa copia dello script.
+    @objc func claudeHook(_ install: Bool, with reply: @escaping (Bool) -> Void) {
+        // Questo bundle è Contents/XPCServices/BoringNotchXPCHelper.xpc
+        let hook = Bundle.main.bundleURL.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Resources/claude-hook.js").path
+        let settings = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
+        if install {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-l", "JavaScript", hook, "install", hook, settings.path]
+            try? process.run()
+            process.waitUntilExit()
+        }
+        reply((try? String(contentsOf: settings, encoding: .utf8))?.contains(hook) ?? false)
+    }
+
     /// Un messaggio = un processo `claude -p` nella home; `--resume` prosegue la sessione.
     /// Mentre Claude lavora, testo e tool usati arrivano all'app come distributed notification
     /// "boringnotch.claude.chat" (userInfo: role, text). La reply restituisce il session_id (nil se non è partito).

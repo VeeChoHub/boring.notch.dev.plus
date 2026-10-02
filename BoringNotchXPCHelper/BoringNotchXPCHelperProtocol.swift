@@ -22,6 +22,8 @@ import Foundation
     func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void)
     // Claude Code: esegue un messaggio della chat del notch, reply con il session_id
     func runClaude(_ prompt: String, sessionId: String?, with reply: @escaping (String?) -> Void)
+    // Claude Code: install = registra claude-hook.js dell'app in ~/.claude/settings.json; reply = registrato
+    func claudeHook(_ install: Bool, with reply: @escaping (Bool) -> Void)
 }
 
 /*

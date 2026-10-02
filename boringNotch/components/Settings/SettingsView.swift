@@ -1735,9 +1735,39 @@ struct ClaudeSettings: View {
     @Default(.claudeSoundSort) var sort
     @State private var rowFrames: [String: CGRect] = [:]
     @State private var dragging: String?
+    // Onboarding: nil finché l'helper non risponde, poi sparisce quando gli hook puntano allo script dell'app
+    @State private var hookInstalled: Bool?
+    @State private var installFailed = false
 
     var body: some View {
         Form {
+            if hookInstalled == false {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Boring Notch adds a hook and the status line to ~/.claude/settings.json (backup in settings.json.bak). Restart open Claude Code sessions afterwards.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if installFailed {
+                            Text("Installation failed. Is Claude Code installed?")
+                                .font(.subheadline)
+                                .foregroundStyle(.red)
+                        }
+                        Button("Install") {
+                            Task {
+                                let installed = await XPCHelperClient.shared.claudeHook(install: true)
+                                installFailed = !installed
+                                withAnimation { hookInstalled = installed }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Set up Claude Code")
+                }
+            }
+
             Section {
                 Defaults.Toggle(key: .claudeLiveActivity) {
                     Text("Show session status in the closed notch")
@@ -1745,10 +1775,6 @@ struct ClaudeSettings: View {
                 Defaults.Toggle(key: .claudeOpenOnHover) {
                     Text("Open the Claude tab while a session is working")
                 }
-            } footer: {
-                Text("Requires claude-hook.js registered as a hook and status line in ~/.claude/settings.json.")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
             }
 
             Section {
@@ -1805,6 +1831,7 @@ struct ClaudeSettings: View {
             }
         }
         .coordinateSpace(.named("claudeSounds"))
+        .task { hookInstalled = await XPCHelperClient.shared.claudeHook(install: false) }
         .accentColor(.effectiveAccent)
         .navigationTitle("Claude Code")
     }

@@ -44,7 +44,7 @@ struct ContentView: View {
     private let extendedHoverPadding: CGFloat = 30
     // Lati della vista a riposo: uguali, o il nero non resta centrato sul notch fisico
     private let idleSideWidth: CGFloat = 50
-    private let claudeCompletedSideWidth: CGFloat = 90
+    private let claudeCompletedSideWidth: CGFloat = 80
     private let zeroHeightHoverPadding: CGFloat = 10
 
     private var topCornerRadius: CGFloat {
@@ -440,24 +440,43 @@ struct ContentView: View {
     func ClaudeLiveActivity(_ state: ClaudeState) -> some View {
         let side = max(0, vm.effectiveClosedNotchHeight - 12)
         if state == .done {
-            // Sessione appena completata: nome a sinistra della fotocamera, "Completata" a destra
-            HStack {
-                Text(coordinator.claudeCompletedName ?? "")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(width: claudeCompletedSideWidth, alignment: .trailing)
-
+            // Sessione appena completata: il notch si allunga e mostra il messaggio sotto la fotocamera
+            let width = vm.closedNotchSize.width + 2 * claudeCompletedSideWidth
+            let session = coordinator.claudeCompleted
+            VStack(spacing: 0) {
                 Rectangle()
-                    .fill(.black)
-                    .frame(width: vm.closedNotchSize.width + -cornerRadiusInsets.closed.top)
-
-                Text("Completata")
-                    .foregroundStyle(Color.aquaGreen)
-                    .frame(width: claudeCompletedSideWidth, alignment: .leading)
+                    .fill(.clear)
+                    .frame(width: width, height: vm.effectiveClosedNotchHeight)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image("claude")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 16, height: 16)
+                        Text(session.map { URL(fileURLWithPath: $0.cwd).lastPathComponent } ?? "")
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 8)
+                        Text("Completata")
+                            .foregroundStyle(Color.aquaGreen)
+                            .fixedSize()
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    // Modello · contesto usati/totali | token della task | costo
+                    if let details = session?.details, !details.isEmpty {
+                        Text(details)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.gray)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(width: width)
+                .padding(.bottom, 10)
             }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
+            .transition(.opacity)
         } else {
             HStack {
                 Image("claude")
@@ -473,6 +492,8 @@ struct ContentView: View {
                     .frame(width: side, height: side)
             }
             .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
+            // Sparisce subito quando arriva la card: in dissolvenza resterebbe ferma mentre il notch si allarga
+            .transition(.identity)
         }
     }
 

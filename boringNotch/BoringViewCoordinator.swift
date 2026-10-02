@@ -65,6 +65,14 @@ struct ClaudeSession {
     var cwd: String
     var since: Date = .now
     var context: Double? // finestra di contesto usata, 0-100 (dalla statusline)
+    var model: String? // "Opus 5.5" (statusline)
+    var tokens: String? // contesto in token usati/totali, "85k/1M" (statusline)
+    var task: String? // token e costo dell'ultima task, "24.7k tok | $0.36" (hook Stop)
+    // Riga della card di fine sessione: "Opus 5.5 · 85k/1M | 24.7k tok | $0.36"
+    var details: String {
+        [[model, tokens].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "), task ?? ""]
+            .filter { !$0.isEmpty }.joined(separator: " | ")
+    }
     var agents: [String: Bool] = [:] // subagent dell'ultimo gruppo lanciato: agent_id → finito
     var agentsRunning: Bool { agents.values.contains(false) }
 }
@@ -172,10 +180,9 @@ class BoringViewCoordinator: ObservableObject {
     var claudeState: ClaudeState? {
         claudeSessions.values.map(\.state).filter { $0 != .idle }.max { $0.rawValue < $1.rawValue }
     }
-    // Nome (cartella) dell'ultima sessione appena completata
-    var claudeCompletedName: String? {
+    // Ultima sessione appena completata (card "Completata" nel notch chiuso)
+    var claudeCompleted: ClaudeSession? {
         claudeSessions.values.filter { $0.state == .done }.max { $0.since < $1.since }
-            .map { URL(fileURLWithPath: $0.cwd).lastPathComponent }
     }
 
     // JSON grezzo dell'ultimo rate_limits ricevuto: persistito, così la pagina non è vuota dopo un riavvio
@@ -196,6 +203,7 @@ class BoringViewCoordinator: ObservableObject {
                     let cwd = notification.userInfo?["cwd"] as? String ?? ""
                     // Interruzione con Esc (dalla statusline): vale solo se più recente dell'ultimo cambio di stato
                     let at = (notification.userInfo?["at"] as? Double).map(Date.init(timeIntervalSince1970:))
+                    let task = notification.userInfo?["task"] as? String
                     Task { @MainActor in
                         guard let self else { return }
                         if let at, let since = self.claudeSessions[id]?.since, at < since { return }
@@ -211,7 +219,7 @@ class BoringViewCoordinator: ObservableObject {
                                 session.cwd = cwd
                                 session.since = .now
                                 // done arriva solo senza subagent in background (claude-hook.js): azzera anche quelli uccisi
-                                if new == .done { session.agents = [:] }
+                                if new == .done { session.agents = [:]; session.task = task }
                                 self.claudeSessions[id] = session
                                 if new == .done { ClaudeSound.playNext() }
                             }
@@ -244,15 +252,21 @@ class BoringViewCoordinator: ObservableObject {
                     self.claudeSessions[id] = session
                 }
         }
-        // Finestra di contesto: "boringnotch.claude.context" con userInfo { pct } (statusline, solo sessioni già note)
+        // Finestra di contesto: "boringnotch.claude.context" con userInfo { pct, model, tokens } (statusline, solo sessioni già note)
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("boringnotch.claude.context"),
             object: nil, queue: .main) { [weak self] notification in
                 guard let id = notification.object as? String,
                       let pct = notification.userInfo?["pct"] as? Double else { return }
+                let model = notification.userInfo?["model"] as? String
+                let tokens = notification.userInfo?["tokens"] as? String
                 Task { @MainActor in
-                    guard let self, let session = self.claudeSessions[id], session.context != pct else { return }
-                    self.claudeSessions[id]?.context = pct
+                    guard let self, var session = self.claudeSessions[id] else { return }
+                    let old = session
+                    session.context = pct
+                    session.model = model
+                    session.tokens = tokens
+                    if (old.context, old.model, old.tokens) != (pct, model, tokens) { self.claudeSessions[id] = session }
                 }
         }
         DistributedNotificationCenter.default().addObserver(

@@ -243,6 +243,22 @@ final class XPCHelperClient: NSObject {
         }
     }
 
+    /// Claude Code (onboarding nelle impostazioni): install = registra gli hook; true se sono registrati.
+    nonisolated func claudeHook(install: Bool) async -> Bool {
+        do {
+            let service = await MainActor.run {
+                ensureRemoteService()
+            }
+            return try await service.withContinuation { service, continuation in
+                service.claudeHook(install) { installed in
+                    continuation.resume(returning: installed)
+                }
+            }
+        } catch {
+            return false
+        }
+    }
+
     nonisolated func setScreenBrightness(_ value: Float) async -> Bool {
         do {
             let service = await MainActor.run {
