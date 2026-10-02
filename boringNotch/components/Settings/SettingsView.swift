@@ -1634,6 +1634,8 @@ struct Advanced: View {
             } header: {
                 Text("Window Behavior")
             }
+
+            ClaudeDebugSection()
         }
         .accentColor(.effectiveAccent)
         .navigationTitle("Advanced")
@@ -1725,6 +1727,129 @@ struct AccentCircleButton: View {
         }
         .buttonStyle(.plain)
         .help(isSystemDefault ? "Use your macOS system accent color" : "")
+    }
+}
+
+// Advanced → Claude Extension Debug Mode: prove del notch senza sessioni Claude Code vere
+struct ClaudeDebugSection: View {
+    @ObservedObject var coordinator = BoringViewCoordinator.shared
+    @AppStorage("claudeDebugName") private var name = "simple_budget"
+    // Simulate Completed Task: valori della card "Completata"
+    @AppStorage("claudeDebugModel") private var model = "Opus 5.5"
+    @AppStorage("claudeDebugContext") private var context = "85k/1M"
+    @AppStorage("claudeDebugTaskTokens") private var taskTokens = "46.8k"
+    @AppStorage("claudeDebugCost") private var cost = 1.97
+    @State private var simulating = false
+    // Simulate Session: sessione finta che resta finché non la togli
+    @State private var state: ClaudeState = .working
+    @State private var agents = 2
+    @State private var agentsDone = 1
+    @State private var contextPercent = 50.0
+    @State private var cacheExpired = false
+    @State private var completedOpen = false
+    @State private var sessionOpen = false
+    @State private var logOpen = false
+
+    // Tutta la riga apre e chiude il gruppo, non solo la freccia
+    private func header(_ title: String, _ isOpen: Binding<Bool>) -> some View {
+        Text(title)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation { isOpen.wrappedValue.toggle() } }
+    }
+
+    var body: some View {
+        Section {
+            TextField("Session name", text: $name)
+
+            DisclosureGroup(isExpanded: $completedOpen) {
+                TextField("Model", text: $model)
+                TextField("Context (used/total)", text: $context)
+                TextField("Task tokens", text: $taskTokens)
+                TextField("Cost ($)", value: $cost, format: .number.precision(.fractionLength(2)))
+                Button("Simulate") { simulateCompleted() }
+                    .disabled(simulating)
+            } label: {
+                header("Simulate Completed Task", $completedOpen)
+            }
+
+            DisclosureGroup(isExpanded: $sessionOpen) {
+                Picker("State", selection: $state) {
+                    Text("Working").tag(ClaudeState.working)
+                    Text("Question").tag(ClaudeState.question)
+                    Text("Permission").tag(ClaudeState.permission)
+                    Text("Completed (idle)").tag(ClaudeState.idle)
+                }
+                Stepper("Subagents launched: \(agents)", value: $agents, in: 0...10)
+                    .onChange(of: agents) { _, value in agentsDone = min(agentsDone, value) }
+                Stepper("Subagents finished: \(agentsDone)", value: $agentsDone, in: 0...agents)
+                Slider(value: $contextPercent, in: 0...100, step: 1) {
+                    Text("Context \(Int(contextPercent))%")
+                }
+                Toggle("Cache expired (1 h since completed)", isOn: $cacheExpired)
+                    .disabled(state != .idle)
+                HStack {
+                    Button("Show") { showSession() }
+                    Button("Remove") { withAnimation(.smooth) { coordinator.claudeSessions["debug-session"] = nil } }
+                }
+            } label: {
+                header("Simulate Session", $sessionOpen)
+            }
+
+            DisclosureGroup(isExpanded: $logOpen) {
+                if coordinator.claudeLog.isEmpty {
+                    Text("No state changes received yet").foregroundStyle(.secondary)
+                }
+                ForEach(Array(coordinator.claudeLog.enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(coordinator.claudeLog.joined(separator: "\n"), forType: .string)
+                    }
+                    Button("Clear") { coordinator.claudeLog = [] }
+                }
+            } label: {
+                header("Event Log (\(coordinator.claudeLog.count))", $logOpen)
+            }
+
+            Button("Remove All Sessions", role: .destructive) {
+                withAnimation(.smooth) { coordinator.claudeSessions = [:] }
+            }
+        } header: {
+            Text("Claude Extension Debug Mode")
+        } footer: {
+            Text("Simulations show up in the closed notch (needs \"Show session status in the closed notch\") and in the Claude tab. Removed real sessions come back at their next event.")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+        }
+    }
+
+    // Stesso percorso di claude-hook.js: al lavoro → completata (card + suono, 5 s) → sessione rimossa
+    private func simulateCompleted() {
+        let id = "debug-task"
+        simulating = true
+        Task {
+            await coordinator.updateClaudeSession(id, state: .working, cwd: name)
+            coordinator.claudeSessions[id]?.model = model
+            coordinator.claudeSessions[id]?.tokens = context
+            await coordinator.updateClaudeSession(id, state: .done, cwd: name,
+                                                  task: "\(taskTokens) tok | $" + String(format: "%.2f", cost))
+            await coordinator.updateClaudeSession(id, state: nil, cwd: name)
+            simulating = false
+        }
+    }
+
+    private func showSession() {
+        var session = ClaudeSession(state: state, cwd: name)
+        session.context = contextPercent
+        session.agents = Dictionary(uniqueKeysWithValues: (0..<agents).map { ("debug-\($0)", $0 < agentsDone) })
+        // Cache scaduta = completata da più di un'ora (regola della riga in ClaudeSessionsView)
+        if cacheExpired && state == .idle { session.since = .now.addingTimeInterval(-3600) }
+        withAnimation(.smooth) { coordinator.claudeSessions["debug-session"] = session }
     }
 }
 

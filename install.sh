@@ -21,9 +21,9 @@ if ! security find-certificate -c "$CERT" >/dev/null 2>&1; then
   rm -rf "$tmp"
 fi
 
-# Hardened runtime off: with it, library validation rejects the prebuilt MediaRemoteAdapter.framework
+# Hardened runtime off: with it, library validation rejects the prebuilt MediaRemoteAdapter.framework. UNIVERSAL=1 (release.sh): Apple Silicon + Intel
 xcodebuild -project boringNotch.xcodeproj -scheme boringNotch -configuration Release \
-  -derivedDataPath build ENABLE_HARDENED_RUNTIME=NO build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
+  -derivedDataPath build ${UNIVERSAL:+-destination generic/platform=macOS} ENABLE_HARDENED_RUNTIME=NO build | grep -E "error:|BUILD (SUCCEEDED|FAILED)"
 
 # The Install button in Settings (Claude Code) registers this copy as the Claude Code hook.
 # ponytail: copied here instead of an Xcode resource, the app is only built by this script

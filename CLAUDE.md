@@ -19,7 +19,20 @@ Note (le motivazioni sono anche commentate in `install.sh`):
 - Impostazioni: stanno nel container sandbox `~/Library/Containers/theboringteam.boringnotch/` e sopravvivono alla reinstallazione. Con la firma a certificato macOS protegge il container: dal terminale `ls`/`plutil` danno "Operation not permitted", è normale.
 - `build/` è già in `.gitignore`.
 - Avvio al login: configurato come login item di macOS sul path `/Applications/Boring Notch.app`, sopravvive alle reinstallazioni. Il toggle "Launch at login" nelle impostazioni dell'app (SMAppService) è ridondante: lascialo spento.
-- Sparkle punta all'appcast upstream (`SUFeedURL` in Info.plist): non accettare gli aggiornamenti proposti dall'app, sovrascriverebbero il fork con la release ufficiale.
+- Sparkle ("Controlla aggiornamenti") legge l'`appcast.xml` allegato all'ultima release del fork (`SUFeedURL` = `releases/latest/download/appcast.xml`). La verifica usa la nostra chiave EdDSA (`SUPublicEDKey`), la cui privata è nel Portachiavi di login. Senza la privata non si possono firmare aggiornamenti: tienine un backup (`generate_keys -x`). Sparkle confronta il numero di build (`CURRENT_PROJECT_VERSION`), non la versione.
+
+## Push = release
+
+Ogni push si fa con `./release.sh`, mai con `git push` da solo. Va lanciato con il working tree pulito (prima committa).
+Senza argomenti usa la versione successiva all'ultimo tag (`2.7.3-plus.N` → `N+1`); in alternativa `./release.sh <versione>`.
+Lo script, in ordine:
+1. alza build e versione nel pbxproj;
+2. compila universale e installa in locale (`UNIVERSAL=1 ./install.sh`);
+3. crea `build/release/archives/boringNotch.dmg` e l'appcast firmato (`generate_appcast`, legge la chiave dal Portachiavi);
+4. committa il bump, crea il tag `v<versione>`, fa push di branch e tag;
+5. pubblica la release su GitHub con dmg e `appcast.xml`, segnata come latest.
+
+Le app installate la ricevono da "Controlla aggiornamenti".
 
 ## Live activity Claude Code
 
@@ -31,4 +44,5 @@ Note (le motivazioni sono anche commentate in `install.sh`):
 - Notch aperto: tab "Claude" (`ClaudeSessionsView`, al posto del tab Shelf) con tutte le sessioni aperte; se una lavora, l'hover apre direttamente lì (`BoringViewModel.open()`).
 - Limiti di utilizzo (sezione in cima alla pagina Claude): anche `statusLine.command` in `~/.claude/settings.json` passa il suo input a `claude-hook.js`, che inoltra `rate_limits` (solo `five_hour` e `seven_day`, gli unici esposti) come `boringnotch.claude.limits`; l'app lo salva in `@AppStorage("claudeLimits")`.
 - Chat nel notch (bottone in fondo alla pagina Claude, `ClaudeChatView.swift`): l'app è in sandbox, quindi `claude` lo lancia `BoringNotchXPCHelper.runClaude` (fuori sandbox), un `claude -p --resume <id>` per messaggio nella home, con i permessi di `~/.claude/settings.json`. L'helper ha `JoinExistingSession = true` nel suo `Info.plist`: senza, launchd avvia il servizio XPC in una sessione di sicurezza nuova dove il Portachiavi di login è bloccato, `security` esce con 36 e claude risulta "Not logged in". Testo e tool arrivano come `boringnotch.claude.chat`; messaggi e session_id sono in UserDefaults finché l'utente non scrive `/clear`. Il protocollo XPC esiste in due copie (app e helper): tenerle allineate.
+- Debug nell'app: Impostazioni → Advanced → "Claude Extension Debug Mode" (`ClaudeDebugSection` in `SettingsView.swift`): simula la card "Completata" con valori a scelta, una sessione finta (stato, subagent x/y, contesto %, cache scaduta), mostra il log degli ultimi cambi di stato (`BoringViewCoordinator.claudeLog`) e rimuove tutte le sessioni. Le simulazioni passano da `updateClaudeSession`, lo stesso metodo usato dagli hook (niente distributed notification dall'app: in sandbox perderebbe lo userInfo).
 - Prova senza Claude: `echo '{"hook_event_name":"UserPromptSubmit","session_id":"t","cwd":"/tmp/x"}' | ./claude-hook.js` (poi `SessionEnd` per toglierla).

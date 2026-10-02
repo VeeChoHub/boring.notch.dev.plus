@@ -184,6 +184,46 @@ class BoringViewCoordinator: ObservableObject {
     var claudeCompleted: ClaudeSession? {
         claudeSessions.values.filter { $0.state == .done }.max { $0.since < $1.since }
     }
+    // Ultimi cambi di stato e subagent (da claude-hook.js o simulati), più recenti in cima (Advanced → Claude Extension Debug Mode)
+    @Published var claudeLog: [String] = []
+
+    private func logClaude(_ event: String, _ id: String, cwd: String, _ extra: String = "") {
+        let project = URL(fileURLWithPath: cwd.isEmpty ? claudeSessions[id]?.cwd ?? "" : cwd).lastPathComponent
+        let line = [Date.now.formatted(date: .omitted, time: .standard), event, project, String(id.prefix(8)), extra]
+            .filter { !$0.isEmpty }.joined(separator: " · ")
+        claudeLog = Array(([line] + claudeLog).prefix(50))
+    }
+
+    // Cambio di stato di una sessione (da claude-hook.js o dal debug nelle impostazioni); nil = sessione chiusa.
+    // Per .done ritorna dopo i 5 s della card, quando la sessione è tornata idle
+    func updateClaudeSession(_ id: String, state: ClaudeState?, cwd: String, at: Date? = nil, task: String? = nil) async {
+        if let at, let since = claudeSessions[id]?.since, at < since { return }
+        withAnimation(.smooth) {
+            guard var new = state else { logClaude("ended", id, cwd: cwd); claudeSessions[id] = nil; return }
+            let old = claudeSessions[id]
+            // idle_prompt arriva anche mentre aspetta i subagent in background: resta al lavoro.
+            // ponytail: anche Esc che uccide i subagent (niente SubagentStop) lascia "al lavoro" fino al prossimo Stop
+            if new == .idle, old?.agentsRunning == true { new = .working }
+            if old?.state != new {
+                // Solo i cambi di stato: "working" arriva a ogni tool e riempirebbe il log
+                logClaude("\(new)", id, cwd: cwd, new == .done ? task ?? "" : "")
+                var session = old ?? ClaudeSession(state: new, cwd: cwd)
+                session.state = new
+                session.cwd = cwd
+                session.since = .now
+                // done arriva solo senza subagent in background (claude-hook.js): azzera anche quelli uccisi
+                if new == .done { session.agents = [:]; session.task = task }
+                claudeSessions[id] = session
+                if new == .done { ClaudeSound.playNext() }
+            }
+        }
+        guard state == .done, let since = claudeSessions[id]?.since else { return }
+        try? await Task.sleep(for: .seconds(5))
+        // Torna idle solo se nel frattempo non è cambiato nulla (es. un nuovo prompt)
+        if claudeSessions[id]?.state == .done, claudeSessions[id]?.since == since {
+            withAnimation(.smooth) { claudeSessions[id]?.state = .idle }
+        }
+    }
 
     // JSON grezzo dell'ultimo rate_limits ricevuto: persistito, così la pagina non è vuota dopo un riavvio
     @AppStorage("claudeLimits") var claudeLimitsJSON: String = ""
@@ -205,31 +245,7 @@ class BoringViewCoordinator: ObservableObject {
                     let at = (notification.userInfo?["at"] as? Double).map(Date.init(timeIntervalSince1970:))
                     let task = notification.userInfo?["task"] as? String
                     Task { @MainActor in
-                        guard let self else { return }
-                        if let at, let since = self.claudeSessions[id]?.since, at < since { return }
-                        withAnimation(.smooth) {
-                            guard var new = state else { self.claudeSessions[id] = nil; return }
-                            let old = self.claudeSessions[id]
-                            // idle_prompt arriva anche mentre aspetta i subagent in background: resta al lavoro.
-                            // ponytail: anche Esc che uccide i subagent (niente SubagentStop) lascia "al lavoro" fino al prossimo Stop
-                            if new == .idle, old?.agentsRunning == true { new = .working }
-                            if old?.state != new {
-                                var session = old ?? ClaudeSession(state: new, cwd: cwd)
-                                session.state = new
-                                session.cwd = cwd
-                                session.since = .now
-                                // done arriva solo senza subagent in background (claude-hook.js): azzera anche quelli uccisi
-                                if new == .done { session.agents = [:]; session.task = task }
-                                self.claudeSessions[id] = session
-                                if new == .done { ClaudeSound.playNext() }
-                            }
-                        }
-                        guard state == .done, let since = self.claudeSessions[id]?.since else { return }
-                        try? await Task.sleep(for: .seconds(5))
-                        // Torna idle solo se nel frattempo non è cambiato nulla (es. un nuovo prompt)
-                        if self.claudeSessions[id]?.state == .done, self.claudeSessions[id]?.since == since {
-                            withAnimation(.smooth) { self.claudeSessions[id]?.state = .idle }
-                        }
+                        await self?.updateClaudeSession(id, state: state, cwd: cwd, at: at, task: task)
                     }
             }
         }
@@ -240,7 +256,9 @@ class BoringViewCoordinator: ObservableObject {
                 guard let id = notification.object as? String,
                       let agent = notification.userInfo?["agent"] as? String else { return }
                 let done = notification.userInfo?["done"] as? Bool ?? false
+                let cwd = notification.userInfo?["cwd"] as? String ?? ""
                 Task { @MainActor in
+                    self?.logClaude(done ? "subagent stop" : "subagent start", id, cwd: cwd, String(agent.prefix(8)))
                     guard let self, var session = self.claudeSessions[id] else { return }
                     if !done {
                         // Nessuno dei precedenti lavora più: nuovo gruppo, il conteggio riparte
