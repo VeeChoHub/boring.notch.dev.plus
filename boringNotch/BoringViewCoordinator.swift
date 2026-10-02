@@ -20,6 +20,37 @@ enum SneakContentType {
     case download
 }
 
+// Stato di una sessione Claude Code, inviato da claude-hook.js. rawValue = priorità nel notch.
+enum ClaudeState: Int, CaseIterable {
+    case idle
+    case working
+    case done // ha appena finito (hook Stop): spunta per 10 s, poi torna idle
+    case question
+    case permission
+}
+
+struct ClaudeSession {
+    var state: ClaudeState
+    var cwd: String
+    var since: Date = .now
+}
+
+// rate_limits della statusline di Claude Code (used_percentage 0-100, resets_at epoch in secondi)
+struct ClaudeLimit: Decodable {
+    let usedPercentage: Double
+    let resetsAt: TimeInterval
+}
+
+extension ClaudeLimit {
+    // Dato persistito con finestra già scaduta: il limite è stato azzerato
+    var used: Double { Date(timeIntervalSince1970: resetsAt) < .now ? 0 : min(usedPercentage, 100) }
+}
+
+struct ClaudeLimits: Decodable {
+    let fiveHour: ClaudeLimit?
+    let sevenDay: ClaudeLimit?
+}
+
 struct sneakPeek {
     var show: Bool = false
     var type: SneakContentType = .music
@@ -101,7 +132,59 @@ class BoringViewCoordinator: ObservableObject {
     private var accessibilityObserver: Any?
     private var hudReplacementCancellable: AnyCancellable?
 
+    // ponytail: una sessione uccisa senza SessionEnd resta in lista fino al riavvio dell'app; aggiungere un timeout se succede
+    @Published var claudeSessions: [String: ClaudeSession] = [:]
+    // Stato più urgente tra le sessioni attive: nil se nessuna lavora (le idle non compaiono nel notch chiuso)
+    var claudeState: ClaudeState? {
+        claudeSessions.values.map(\.state).filter { $0 != .idle }.max { $0.rawValue < $1.rawValue }
+    }
+
+    // JSON grezzo dell'ultimo rate_limits ricevuto: persistito, così la pagina non è vuota dopo un riavvio
+    @AppStorage("claudeLimits") var claudeLimitsJSON: String = ""
+    var claudeLimits: ClaudeLimits? {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(ClaudeLimits.self, from: Data(claudeLimitsJSON.utf8))
+    }
+
     private init() {
+        // Claude Code: "boringnotch.claude.<stato>" con object = session_id; "ended" (nil) rimuove la sessione
+        for state in ClaudeState.allCases.map(Optional.some) + [nil] {
+            DistributedNotificationCenter.default().addObserver(
+                forName: NSNotification.Name("boringnotch.claude.\(state.map { "\($0)" } ?? "ended")"),
+                object: nil, queue: .main) { [weak self] notification in
+                    guard let id = notification.object as? String else { return }
+                    let cwd = notification.userInfo?["cwd"] as? String ?? ""
+                    // Interruzione con Esc (dalla statusline): vale solo se più recente dell'ultimo cambio di stato
+                    let at = (notification.userInfo?["at"] as? Double).map(Date.init(timeIntervalSince1970:))
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if let at, let since = self.claudeSessions[id]?.since, at < since { return }
+                        withAnimation(.smooth) {
+                            guard let state else { self.claudeSessions[id] = nil; return }
+                            if self.claudeSessions[id]?.state != state {
+                                self.claudeSessions[id] = ClaudeSession(state: state, cwd: cwd)
+                            }
+                        }
+                        guard state == .done, let since = self.claudeSessions[id]?.since else { return }
+                        try? await Task.sleep(for: .seconds(10))
+                        // Torna idle solo se nel frattempo non è cambiato nulla (es. un nuovo prompt)
+                        if self.claudeSessions[id]?.state == .done, self.claudeSessions[id]?.since == since {
+                            withAnimation(.smooth) { self.claudeSessions[id]?.state = .idle }
+                        }
+                    }
+            }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("boringnotch.claude.limits"),
+            object: nil, queue: .main) { [weak self] notification in
+                guard let json = notification.userInfo?["json"] as? String else { return }
+                Task { @MainActor in
+                    if self?.claudeLimitsJSON != json { self?.claudeLimitsJSON = json }
+                }
+        }
+
+
         // Perform migration from name-based to UUID-based storage
         if preferredScreenUUID == nil, let legacyName = legacyPreferredScreenName {
             // Try to find screen by name and migrate to UUID

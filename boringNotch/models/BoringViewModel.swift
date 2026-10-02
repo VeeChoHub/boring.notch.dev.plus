@@ -190,9 +190,13 @@ class BoringViewModel: NSObject, ObservableObject {
     }
 
     func open() {
-        self.notchSize = openNotchSize
+        // Claude Code al lavoro: apri sulla pagina delle sessioni
+        if coordinator.claudeState != nil {
+            coordinator.currentView = .claude
+        }
+        self.notchSize = openNotchSize(for: coordinator.currentView)
         self.notchState = .open
-        
+
         // Force music information update when notch is opened
         MusicManager.shared.forceUpdate()
     }

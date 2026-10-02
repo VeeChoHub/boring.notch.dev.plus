@@ -20,5 +20,7 @@ import Foundation
     func isScreenBrightnessAvailable(with reply: @escaping (Bool) -> Void)
     func currentScreenBrightness(with reply: @escaping (NSNumber?) -> Void)
     func setScreenBrightness(_ value: Float, with reply: @escaping (Bool) -> Void)
+    // Claude Code: esegue un messaggio della chat del notch, reply con il session_id
+    func runClaude(_ prompt: String, sessionId: String?, with reply: @escaping (String?) -> Void)
 }
 

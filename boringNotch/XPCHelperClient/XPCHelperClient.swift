@@ -227,6 +227,22 @@ final class XPCHelperClient: NSObject {
         }
     }
     
+    /// Claude Code (chat del notch): attende la fine del messaggio, restituisce il session_id.
+    nonisolated func runClaude(_ prompt: String, sessionId: String?) async -> String? {
+        do {
+            let service = await MainActor.run {
+                ensureRemoteService()
+            }
+            return try await service.withContinuation { service, continuation in
+                service.runClaude(prompt, sessionId: sessionId) { session in
+                    continuation.resume(returning: session)
+                }
+            }
+        } catch {
+            return nil
+        }
+    }
+
     nonisolated func setScreenBrightness(_ value: Float) async -> Bool {
         do {
             let service = await MainActor.run {

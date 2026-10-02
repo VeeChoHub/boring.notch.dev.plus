@@ -11,7 +11,64 @@ import IOKit
 import CoreGraphics
 
 class BoringNotchXPCHelper: NSObject, BoringNotchXPCHelperProtocol {
-    
+
+    // MARK: - Claude Code (chat del notch: l'app è in sandbox e non può lanciare claude)
+
+    /// Un messaggio = un processo `claude -p` nella home; `--resume` prosegue la sessione.
+    /// Mentre Claude lavora, testo e tool usati arrivano all'app come distributed notification
+    /// "boringnotch.claude.chat" (userInfo: role, text). La reply restituisce il session_id (nil se non è partito).
+    @objc func runClaude(_ prompt: String, sessionId: String?, with reply: @escaping (String?) -> Void) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        // Shell di login: stesso PATH del terminale (claude sta in ~/.local/bin).
+        // ${2:+--resume} ${2:+"$2"} separati: zsh non divide le parole, "--resume id" sarebbe un argomento unico
+        process.arguments = [
+            "-lc", "exec claude -p \"$1\" --output-format stream-json --verbose ${2:+--resume} ${2:+\"$2\"}",
+            "claude", prompt, sessionId ?? "",
+        ]
+        process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let output = Pipe()
+        process.standardOutput = output
+        do { try process.run() } catch { reply(nil); return }
+
+        func post(_ role: String, _ text: String) {
+            DistributedNotificationCenter.default().postNotificationName(
+                .init("boringnotch.claude.chat"), object: nil,
+                userInfo: ["role": role, "text": text], deliverImmediately: true)
+        }
+
+        Task.detached {
+            var session: String?
+            // do/catch: se la lettura fallisce la reply deve partire comunque, o l'app resta in attesa
+            do { for try await line in output.fileHandleForReading.bytes.lines {
+                guard let event = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else { continue }
+                session = event["session_id"] as? String ?? session
+                switch event["type"] as? String {
+                case "assistant":
+                    // Solo testo e nome del tool: i tool_result (eventi "user") possono essere enormi e non servono
+                    for block in (event["message"] as? [String: Any])?["content"] as? [[String: Any]] ?? [] {
+                        if block["type"] as? String == "text", let text = block["text"] as? String {
+                            post("assistant", text)
+                        } else if block["type"] as? String == "tool_use", let name = block["name"] as? String {
+                            let input = block["input"] as? [String: Any] ?? [:]
+                            let detail = ["command", "file_path", "pattern", "url", "query", "description"]
+                                .lazy.compactMap { input[$0] as? String }.first ?? ""
+                            post("tool", "\(name) · \(detail.prefix(120))")
+                        }
+                    }
+                case "result" where event["is_error"] as? Bool == true:
+                    post("error", event["result"] as? String ?? "Errore di Claude Code")
+                default:
+                    break
+                }
+            } } catch {}
+            process.waitUntilExit()
+            reply(session)
+        }
+    }
+
     @objc func isAccessibilityAuthorized(with reply: @escaping (Bool) -> Void) {
         reply(AXIsProcessTrusted())
     }

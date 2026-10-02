@@ -41,6 +41,8 @@ struct ContentView: View {
     private let animationSpring = Animation.interactiveSpring(response: 0.38, dampingFraction: 0.8, blendDuration: 0)
 
     private let extendedHoverPadding: CGFloat = 30
+    // Lati della vista a riposo: uguali, o il nero non resta centrato sul notch fisico
+    private let idleSideWidth: CGFloat = 50
     private let zeroHeightHoverPadding: CGFloat = 10
 
     private var topCornerRadius: CGFloat {
@@ -61,7 +63,9 @@ struct ContentView: View {
     private var computedChinWidth: CGFloat {
         var chinWidth: CGFloat = vm.closedNotchSize.width
 
-        if coordinator.expandingView.type == .battery && coordinator.expandingView.show
+        if coordinator.claudeState != nil && vm.notchState == .closed && !vm.hideOnClosed {
+            chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
+        } else if coordinator.expandingView.type == .battery && coordinator.expandingView.show
             && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
         {
             chinWidth = 640
@@ -75,6 +79,10 @@ struct ContentView: View {
             && !vm.hideOnClosed
         {
             chinWidth += (2 * max(0, vm.effectiveClosedNotchHeight - 12) + 20)
+        } else if !coordinator.expandingView.show && vm.notchState == .closed
+            && !musicManager.isPlaying && musicManager.isPlayerIdle && !vm.hideOnClosed
+        {
+            chinWidth += (2 * idleSideWidth + 20)
         }
 
         return chinWidth
@@ -138,12 +146,6 @@ struct ContentView: View {
                         view
                             .panGesture(direction: .down) { translation, phase in
                                 handleDownGesture(translation: translation, phase: phase)
-                            }
-                    }
-                    .conditionalModifier(Defaults[.closeGestureEnabled] && Defaults[.enableGestures]) { view in
-                        view
-                            .panGesture(direction: .up) { translation, phase in
-                                handleUpGesture(translation: translation, phase: phase)
                             }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: .sharingDidFinish)) { _ in
@@ -214,6 +216,20 @@ struct ContentView: View {
         .background(dragDetector)
         .preferredColorScheme(.dark)
         .environmentObject(vm)
+        .onChange(of: coordinator.currentView) { _, view in
+            // L'altezza del notch aperto dipende dalla pagina (Claude è più alta)
+            if vm.notchState == .open {
+                withAnimation(.smooth) { vm.notchSize = openNotchSize(for: view) }
+            }
+        }
+        .onChange(of: vm.notchState) { _, state in
+            // Chat Claude: a notch chiuso la tastiera torna all'app in primo piano. Il pannello è non attivante,
+            // quindi toglierlo e rimetterlo davanti (senza renderlo key) restituisce il focus a chi lo aveva
+            if state == .closed, let window = NSApp.windows.first(where: { $0.isKeyWindow && $0 is BoringNotchSkyLightWindow }) {
+                window.orderOut(nil)
+                window.orderFrontRegardless()
+            }
+        }
         .onChange(of: vm.anyDropZoneTargeting) { _, isTargeted in
             anyDropDebounceTask?.cancel()
 
@@ -257,7 +273,9 @@ struct ContentView: View {
                     .padding(.top, 40)
                     Spacer()
                 } else {
-                    if coordinator.expandingView.type == .battery && coordinator.expandingView.show
+                    if let claudeState = coordinator.claudeState, vm.notchState == .closed, !vm.hideOnClosed {
+                        ClaudeLiveActivity(claudeState)
+                    } else if coordinator.expandingView.type == .battery && coordinator.expandingView.show
                         && vm.notchState == .closed && Defaults[.showPowerStatusNotifications]
                     {
                         HStack(spacing: 0) {
@@ -292,6 +310,8 @@ struct ContentView: View {
                               .frame(alignment: .center)
                       } else if !coordinator.expandingView.show && vm.notchState == .closed && (!musicManager.isPlaying && musicManager.isPlayerIdle) && Defaults[.showNotHumanFace] && !vm.hideOnClosed  {
                           BoringFaceAnimation()
+                      } else if !coordinator.expandingView.show && vm.notchState == .closed && !musicManager.isPlaying && musicManager.isPlayerIdle && !vm.hideOnClosed {
+                          IdleStatusActivity()
                        } else if vm.notchState == .open {
                            BoringHeader()
                                .frame(height: max(24, vm.effectiveClosedNotchHeight))
@@ -349,6 +369,8 @@ struct ContentView: View {
                         NotchHomeView(albumArtNamespace: albumArtNamespace)
                     case .shelf:
                         ShelfView()
+                    case .claude:
+                        ClaudeSessionsView()
                     }
                 }
                 .transition(
@@ -362,6 +384,32 @@ struct ContentView: View {
             }
         }
         .onDrop(of: [.fileURL, .url, .utf8PlainText, .plainText, .data], delegate: GeneralDropTargetDelegate(isTargeted: $vm.generalDropTargeting))
+    }
+
+    // Notch chiuso senza riproduzione: limite settimanale di Claude Code (sinistra) e batteria (destra)
+    @ViewBuilder
+    func IdleStatusActivity() -> some View {
+        let week = coordinator.claudeLimits?.sevenDay?.used
+        HStack {
+            HStack(spacing: 4) {
+                CircularProgressView(progress: (week ?? 0) / 100, color: .claude, lineWidth: 2.5)
+                    .frame(width: 14, height: 14)
+                Text(week.map { "\(Int($0.rounded()))%" } ?? "–")
+            }
+            .frame(width: idleSideWidth, alignment: .leading)
+
+            Rectangle()
+                .fill(.black)
+                .frame(width: vm.closedNotchSize.width + -cornerRadiusInsets.closed.top)
+
+            Text("\(Int(batteryModel.levelBattery))%")
+                .foregroundStyle(batteryModel.isCharging ? Color.aquaGreen : .white)
+                .frame(width: idleSideWidth, alignment: .trailing) // speculare alla sinistra: stessi margini dai bordi
+        }
+        .font(.system(size: 12, weight: .semibold))
+        .monospacedDigit()
+        .foregroundStyle(.white)
+        .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
     }
 
     @ViewBuilder
@@ -383,6 +431,25 @@ struct ContentView: View {
             height: vm.effectiveClosedNotchHeight,
             alignment: .center
         )
+    }
+
+    @ViewBuilder
+    func ClaudeLiveActivity(_ state: ClaudeState) -> some View {
+        let side = max(0, vm.effectiveClosedNotchHeight - 12)
+        HStack {
+            Image("claude")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: side, height: side)
+
+            Rectangle()
+                .fill(.black)
+                .frame(width: vm.closedNotchSize.width + -cornerRadiusInsets.closed.top)
+
+            ClaudeStateIcon(state: state)
+                .frame(width: side, height: side)
+        }
+        .frame(height: vm.effectiveClosedNotchHeight, alignment: .center)
     }
 
     @ViewBuilder
@@ -549,7 +616,9 @@ struct ContentView: View {
                         self.isHovering = false
                     }
                     
-                    if self.vm.notchState == .open && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose {
+                    // Chat Claude aperta: il notch resta aperto anche se il mouse esce (si chiude tornando a "Sessioni")
+                    let claudeChatVisible = self.coordinator.currentView == .claude && ClaudeChatModel.shared.isOpen
+                    if self.vm.notchState == .open && !self.vm.isBatteryPopoverActive && !SharingStateManager.shared.preventNotchClose && !claudeChatVisible {
                         self.vm.close()
                     }
                 }
@@ -579,34 +648,6 @@ struct ContentView: View {
                 gestureProgress = .zero
             }
             doOpen()
-        }
-    }
-
-    private func handleUpGesture(translation: CGFloat, phase: NSEvent.Phase) {
-        guard vm.notchState == .open && !vm.isHoveringCalendar else { return }
-
-        withAnimation(animationSpring) {
-            gestureProgress = (translation / Defaults[.gestureSensitivity]) * -20
-        }
-
-        if phase == .ended {
-            withAnimation(animationSpring) {
-                gestureProgress = .zero
-            }
-        }
-
-        if translation > Defaults[.gestureSensitivity] {
-            withAnimation(animationSpring) {
-                isHovering = false
-            }
-            if !SharingStateManager.shared.preventNotchClose { 
-                gestureProgress = .zero
-                vm.close()
-            }
-
-            if Defaults[.enableHaptics] {
-                haptics.toggle()
-            }
         }
     }
 }

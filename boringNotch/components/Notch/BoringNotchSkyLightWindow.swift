@@ -109,6 +109,7 @@ class BoringNotchSkyLightWindow: NSPanel {
     
     private var observers: Set<AnyCancellable> = []
     
-    override var canBecomeKey: Bool { false }
+    // Key solo con la chat Claude aperta: serve per scrivere, altrimenti il notch non ruba mai la tastiera
+    override var canBecomeKey: Bool { MainActor.assumeIsolated { ClaudeChatModel.shared.isOpen } }
     override var canBecomeMain: Bool { false }
 }
